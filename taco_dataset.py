@@ -3,14 +3,16 @@ from torch.utils.data import Dataset
 import torchvision.transforms as T
 from PIL import Image
 import json
+import copy
 import os
 
 class TACODataset(Dataset):
-    def __init__(self, root_dir, annotation_file, transform=None):
+    def __init__(self, root_dir, annotation_file, class_map=None, transform=None):
         """
         Args:
             root_dir (string): 이미지가 있는 디렉토리 경로
             annotation_file (string): annotations_X_train.json 또는 annotations_X_test.json 파일 경로
+            class_map (dict, optional): 기존 클래스 이름을 새로운 클래스 이름으로 매핑하는 딕셔너리
             transform (callable, optional): 이미지에 적용할 변환
         """
         self.root_dir = root_dir
@@ -23,6 +25,10 @@ class TACODataset(Dataset):
         # Load annotations
         with open(annotation_file, 'r') as f:
             self.coco = json.load(f)
+
+        # Apply class mapping if provided
+        if class_map:
+            self.replace_dataset_classes(self.coco, class_map)
 
         # Create category mapping
         self.cat_ids = {}
@@ -89,6 +95,45 @@ class TACODataset(Dataset):
 
     def __len__(self):
         return len(self.ids)
+    
+    def replace_dataset_classes(self, dataset, class_map):
+        """ Replaces classes of dataset based on a dictionary"""
+        class_new_names = list(set(class_map.values()))
+        class_new_names.sort()
+        class_originals = copy.deepcopy(dataset['categories'])
+        dataset['categories'] = []
+        class_ids_map = {}  # map from old id to new id
+
+        # Assign background id 0
+        has_background = False
+        if 'Background' in class_new_names:
+            if class_new_names.index('Background') != 0:
+                class_new_names.remove('Background')
+                class_new_names.insert(0, 'Background')
+            has_background = True
+
+        # Replace categories
+        for id_new, class_new_name in enumerate(class_new_names):
+
+            # Make sure id:0 is reserved for background
+            id_rectified = id_new
+            if not has_background:
+                id_rectified += 1
+
+            category = {
+                'supercategory': '',
+                'id': id_rectified,  # Background has id=0
+                'name': class_new_name,
+            }
+            dataset['categories'].append(category)
+            # Map class names
+            for class_original in class_originals:
+                if class_map[class_original['name']] == class_new_name:
+                    class_ids_map[class_original['id']] = id_rectified
+
+        # Update annotations category id tag
+        for ann in dataset['annotations']:
+            ann['category_id'] = class_ids_map[ann['category_id']]
 
     @property
     def num_classes(self):
